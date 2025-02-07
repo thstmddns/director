@@ -1,6 +1,5 @@
 import os
 import shutil
-import zipfile
 from io import BytesIO
 import streamlit as st
 import easyocr
@@ -117,14 +116,12 @@ if uploaded_files:
         for category, count in category_counts.items():
             st.write(f"- {category}: {count}개")
 
-        if st.button("📥 ZIP 파일 다운로드"):
-            zip_path = create_zip(base_folder)
-            with open(zip_path, "rb") as f:
-                st.download_button(
-                    label="🔽 ZIP 다운로드",
-                    data=f,
-                    file_name="classified_images.zip",
-                    mime="application/zip"
-                )
-            # 다운로드 완료 후 추가 작업을 막기 위해 'running' 상태를 종료할 수 있음
-            st.success("다운로드가 완료되었습니다.")
+        # 바로 다운로드 버튼을 누르면 다운로드가 시작됨
+        zip_path = create_zip(base_folder)
+        with open(zip_path, "rb") as f:
+            st.download_button(
+                label="🔽 ZIP 다운로드",
+                data=f,
+                file_name="classified_images.zip",
+                mime="application/zip"
+            )
