@@ -70,22 +70,30 @@ def process_images(uploaded_files, base_folder):
     for uploaded_file in uploaded_files:
         image_path = os.path.join(base_folder, uploaded_file.name)
         
-        with open(image_path, "wb") as f:
+        # 🔹 먼저 "미분류" 폴더에 저장
+        temp_folder = output_folders["미분류"]
+        temp_path = os.path.join(temp_folder, uploaded_file.name)
+
+        with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        
+
         try:
-            detected_text = ocr_image(image_path)
+            detected_text = ocr_image(temp_path)
             category = classify_text(detected_text, keyword_categories)
             category_counts[category] += 1  # 유형별 개수 증가
 
-            target_folder = output_folders[category]
-            shutil.move(image_path, os.path.join(target_folder, uploaded_file.name))
+            # 🔹 올바른 폴더로 이동 (미분류에 남아 있는 걸 방지)
+            if category != "미분류":
+                target_folder = output_folders[category]
+                shutil.move(temp_path, os.path.join(target_folder, uploaded_file.name))
+
             results.append((uploaded_file.name, category, detected_text))
 
         except Exception as e:
             st.error(f"파일 처리 오류: {e}")
     
     return results, category_counts
+
 
 def create_zip(directory, output_filename="classified_images.zip"):
     zip_path = shutil.make_archive(output_filename.replace(".zip", ""), 'zip', directory)
