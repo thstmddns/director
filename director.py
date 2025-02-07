@@ -6,13 +6,25 @@ import streamlit as st
 import easyocr
 from PIL import Image
 from collections import Counter
+import concurrent.futures
+import threading
+from functools import lru_cache
+
+# Thread-local storage for EasyOCR reader
+thread_local = threading.local()
 
 @st.cache_resource
 def get_reader():
     return easyocr.Reader(['ko', 'en'], gpu=False)
 
-reader = get_reader()
+# Thread-safe reader initialization
+def get_thread_reader():
+    if not hasattr(thread_local, "reader"):
+        thread_local.reader = easyocr.Reader(['ko', 'en'], gpu=False)
+    return thread_local.reader
 
+# Cache keyword categories
+@lru_cache(maxsize=1)
 def get_keyword_categories():
     return {
         '단차불량': ['단차불량', '단차'],
@@ -48,58 +60,82 @@ def create_all_folders(base_folder):
 
 def ocr_image(image_path):
     try:
+        reader = get_thread_reader()
         with Image.open(image_path) as img:
-            result = reader.readtext(image_path, detail=0)
+            # Resize image if it's too large (optional)
+            if max(img.size) > 2000:
+                ratio = 2000 / max(img.size)
+                new_size = tuple(int(dim * ratio) for dim in img.size)
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                # Save resized image temporarily
+                temp_path = f"{image_path}_resized.jpg"
+                img.save(temp_path, quality=85)
+                result = reader.readtext(temp_path, detail=0)
+                os.remove(temp_path)
+            else:
+                result = reader.readtext(image_path, detail=0)
         return " ".join(result)
     except Exception as e:
         st.error(f"OCR 오류: {e}")
         return ""
 
-def classify_text(text, keyword_categories):
+@lru_cache(maxsize=1024)
+def classify_text(text):
+    keyword_categories = get_keyword_categories()
     for category, keywords in keyword_categories.items():
         if any(keyword in text for keyword in keywords):
             return category
     return "미분류"
 
-def process_images(uploaded_files, base_folder):
-    keyword_categories = get_keyword_categories()
-    output_folders = create_all_folders(base_folder)
-    results = []
-    category_counts = Counter()  # 하자 유형 개수 저장
-    
-    for uploaded_file in uploaded_files:
+def process_single_image(args):
+    uploaded_file, base_folder, output_folders = args
+    try:
         image_path = os.path.join(base_folder, uploaded_file.name)
-        
-        # 🔹 먼저 "미분류" 폴더에 저장
         temp_folder = output_folders["미분류"]
         temp_path = os.path.join(temp_folder, uploaded_file.name)
 
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        try:
-            detected_text = ocr_image(temp_path)
-            category = classify_text(detected_text, keyword_categories)
-            category_counts[category] += 1  # 유형별 개수 증가
+        detected_text = ocr_image(temp_path)
+        category = classify_text(detected_text)
 
-            # 🔹 올바른 폴더로 이동 (미분류에 남아 있는 걸 방지)
-            if category != "미분류":
-                target_folder = output_folders[category]
-                shutil.move(temp_path, os.path.join(target_folder, uploaded_file.name))
+        if category != "미분류":
+            target_folder = output_folders[category]
+            shutil.move(temp_path, os.path.join(target_folder, uploaded_file.name))
 
-            results.append((uploaded_file.name, category, detected_text))
+        return uploaded_file.name, category, detected_text
+    except Exception as e:
+        st.error(f"파일 처리 오류: {e}")
+        return None
 
-        except Exception as e:
-            st.error(f"파일 처리 오류: {e}")
+def process_images(uploaded_files, base_folder):
+    output_folders = create_all_folders(base_folder)
+    results = []
+    category_counts = Counter()
+
+    # Prepare arguments for parallel processing
+    process_args = [(file, base_folder, output_folders) for file in uploaded_files]
     
-    return results, category_counts
+    # Process images in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(uploaded_files), 4)) as executor:
+        for result in executor.map(process_single_image, process_args):
+            if result:
+                file_name, category, detected_text = result
+                category_counts[category] += 1
+                results.append((file_name, category, detected_text))
 
+    return results, category_counts
 
 def create_zip(directory, output_filename="classified_images.zip"):
     zip_path = shutil.make_archive(output_filename.replace(".zip", ""), 'zip', directory)
     return zip_path
 
+# Streamlit UI
 st.title("인테리어 하자 분류 시스템")
+
+# Add a progress bar
+progress_bar = st.progress(0)
 
 uploaded_files = st.file_uploader("이미지를 업로드하세요", accept_multiple_files=True, type=["jpg", "png", "jpeg"])
 
@@ -109,10 +145,6 @@ if uploaded_files:
 
     if results:
         st.write("📌 처리 결과:")
-        # for file_name, category, detected_text in results:
-        #     st.write(f"✅ **{file_name}** → {category} (검출된 텍스트: {detected_text})")
-
-        # 🔹 하자 유형별 개수 출력
         st.write("\n📌 **하자 유형별 개수:**")
         for category, count in category_counts.items():
             st.write(f"- {category}: {count}개")
