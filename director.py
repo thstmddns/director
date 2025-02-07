@@ -87,16 +87,9 @@ def process_images(uploaded_files, base_folder):
     
     return results, category_counts
 
-def create_zip(directory):
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for root, _, files in os.walk(directory):
-            for file in files:
-                file_path = os.path.join(root, file)
-                zip_file.write(file_path, os.path.relpath(file_path, directory))
-    
-    zip_buffer.seek(0)
-    return zip_buffer
+def create_zip(directory, output_filename="classified_images.zip"):
+    zip_path = shutil.make_archive(output_filename.replace(".zip", ""), 'zip', directory)
+    return zip_path
 
 st.title("인테리어 하자 분류 시스템")
 
@@ -108,8 +101,8 @@ if uploaded_files:
 
     if results:
         st.write("📌 처리 결과:")
-        for file_name, category, detected_text in results:
-            st.write(f"✅ **{file_name}** → {category} (검출된 텍스트: {detected_text})")
+        # for file_name, category, detected_text in results:
+        #     st.write(f"✅ **{file_name}** → {category} (검출된 텍스트: {detected_text})")
 
         # 🔹 하자 유형별 개수 출력
         st.write("\n📌 **하자 유형별 개수:**")
@@ -117,10 +110,11 @@ if uploaded_files:
             st.write(f"- {category}: {count}개")
 
         if st.button("📥 ZIP 파일 다운로드"):
-            zip_buffer = create_zip(base_folder)
-            st.download_button(
-                label="🔽 ZIP 다운로드",
-                data=zip_buffer,
-                file_name="classified_images.zip",
-                mime="application/zip"
-            )
+            zip_path = create_zip(base_folder)
+            with open(zip_path, "rb") as f:
+                st.download_button(
+                    label="🔽 ZIP 다운로드",
+                    data=f,
+                    file_name="classified_images.zip",
+                    mime="application/zip"
+                )
