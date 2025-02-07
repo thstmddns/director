@@ -7,6 +7,7 @@ import pandas as pd
 import zipfile
 from io import BytesIO
 from PIL import Image
+from collections import Counter
 
 # EasyOCR 리더 초기화
 reader = easyocr.Reader(['ko', 'en'], gpu=False)
@@ -99,7 +100,7 @@ def create_zip(directory):
 
 # Streamlit UI
 st.title("🔍 이미지 자동 분류 시스템")
-st.write("OCR을 이용하여 이미지 분류 후 다운로드 가능")
+st.write("OCR을 이용하여 이미지 분류 후 다운로드 가능(이미지 크기, 양에 따라 수 초 ~ 수 시간이 소요될 수 있습니다.)")
 
 uploaded_files = st.file_uploader("이미지 업로드", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 if uploaded_files:
@@ -108,10 +109,20 @@ if uploaded_files:
     
     # 결과 표시
     st.success("✅ 분류 완료!")
-    for filename, category, detected_text in results:
-        st.write(f"**{filename}** → `{category}`")
-        st.text(f"OCR 결과: {detected_text[:100]}...")  # 너무 길면 자름
-    
+    # for filename, category, detected_text in results:
+    #     st.write(f"**{filename}** → `{category}`")
+    #     st.text(f"OCR 결과: {detected_text[:100]}...") 
+
+    # for filename, category, detected_text in results:
+    #     st.write(f'{category} : {len()}')
+
+    # 분류별 개수 계산
+    category_counts = Counter(category for _, category, _ in results)
+
+    # 결과 출력
+    for category, count in category_counts.items():
+        st.write(f'{category} : {count}')
+
     # CSV 저장
     df = pd.DataFrame(results, columns=["파일명", "분류", "OCR 결과"])
     csv_buffer = BytesIO()
