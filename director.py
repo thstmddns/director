@@ -1,120 +1,130 @@
 import os
-import re
 import shutil
-import easyocr
-import streamlit as st
 import zipfile
 from io import BytesIO
+import streamlit as st
+import easyocr
+from PIL import Image
+from collections import Counter
 
-# EasyOCR 리더 초기화 (GPU 비활성화)
-reader = easyocr.Reader(['ko', 'en'], gpu=False)  # gpu=False로 설정
+@st.cache_resource
+def get_reader():
+    return easyocr.Reader(['ko', 'en'], gpu=False)
 
-# 키워드 정의
+reader = get_reader()
+
 def get_keyword_categories():
     return {
-        '단차불량' : ['단차불량', '단차'],
-        "훼손": ["훼손", "찢김", "긁힘", "파손", "깨짐", "갈라짐", "찍힘", '스크레치', '스크래치', '손상', '뜯김', '찢어짐', '칼자국', '터짐', '까짐', '흠집', '찍김', '웨손', '긁험', '찍험', '찍임', '직힘', '긁림', '긁임', '찢심', '횟손'],
-        "오염": ["오염", "더러움", "얼룩", "변색", '낙서'],
-        "몰딩수정": ["몰딩", "몰딩수정", "몰딩교체", "몰딩작업", '몰딩', '돌딩', '올딩'],
+        '단차불량': ['단차불량', '단차'],
+        "훼손": ["훼손", "찢김", "긁힘", "파손", "깨짐", "갈라짐", "찍힘", "스크레치", "스크래치", "손상", "뜯김", "찢어짐", "칼자국", "터짐", "까짐", "흠집", "찍김", "웨손", "긁험", "찍험", "찍임", "직힘", "긁림", "긁임", "찢심", "횟손"],
+        "오염": ["오염", "더러움", "얼룩", "변색", "낙서"],
+        "몰딩수정": ["몰딩", "몰딩수정", "몰딩교체", "몰딩작업", "돌딩", "올딩"],
         "석고수정": ["석고", "석고수정", "석고보드", "석고작업", "석고면불량"],
-        "누수 및 곰팡이" : ['곰팡이', '누수'],
-        "면불량" : ['면불량', '면 불량', '퍼티', '돌출', '이물질'],
-        '걸레받이 수정' : ['걸레받이', '걸래받이', '걸레받지', '걸레받이수정', '걸레받이 교체', '걸레받이 작업'],
-        '문틀수정' : ['문틀수정', '문틀'],
-        '가구수정' : ['가구', '가구수정'],
-        '틈새' : ['틈새', '틈새수정', '틈새과다'],
-        '합판' : ['합판길이부족', '합판'],
-        '주름' : ['주름'],
-        '들뜸' : ['들뜸', '들뜰', '들픔', '들듬', '둘뜸'],
-        '꼬임' : ['꼬임'],
-        '울음' : ['울음'],
-        '결로' : ['결로'],
-        '이음새' : ['이음새'],
-        "오타공" : ['오타공', '오타콩', '타공과다', '피스타공', '과타공'],
+        "누수 및 곰팡이": ["곰팡이", "누수"],
+        "면불량": ["면불량", "면 불량", "퍼티", "돌출", "이물질"],
+        '걸레받이 수정': ['걸레받이', '걸래받이', '걸레받지', '걸레받이수정', '걸레받이 교체', '걸레받이 작업'],
+        '문틀수정': ['문틀수정', '문틀'],
+        '가구수정': ['가구', '가구수정'],
+        '틈새': ['틈새', '틈새수정', '틈새과다'],
+        '합판': ['합판길이부족', '합판'],
+        '주름': ['주름'],
+        '들뜸': ['들뜸', '들뜰', '들픔', '들듬', '둘뜸'],
+        '꼬임': ['꼬임'],
+        '울음': ['울음'],
+        '결로': ['결로'],
+        '이음새': ['이음새'],
+        "오타공": ['오타공', '오타콩', '타공과다', '피스타공', '과타공']
     }
 
-def normalize_text(text):
-    """텍스트에서 띄어쓰기를 무시하도록 정규화"""
-    return re.sub(r'\\s+', '', text)
+def create_all_folders(base_folder):
+    categories = get_keyword_categories().keys()
+    output_folders = {category: os.path.join(base_folder, category) for category in categories}
+    output_folders["미분류"] = os.path.join(base_folder, "미분류")
+    
+    for folder in output_folders.values():
+        os.makedirs(folder, exist_ok=True)
+    
+    return output_folders
 
-def classify_text(text, keyword_categories):
-    """텍스트를 키워드에 따라 분류"""
-    normalized_text = normalize_text(text)
-    for category, keywords in keyword_categories.items():
-        for keyword in keywords:
-            if normalize_text(keyword) in normalized_text:
-                return category
-    return "unidentified"
-
-def ocr_image(image):
-    """EasyOCR을 사용하여 이미지에서 텍스트 추출"""
+def ocr_image(image_path):
     try:
-        result = reader.readtext(image, detail=0)  # 텍스트만 반환
-        return " ".join(result)  # 인식된 텍스트를 하나의 문자열로 합치기
+        with Image.open(image_path) as img:
+            result = reader.readtext(image_path, detail=0)
+        return " ".join(result)
     except Exception as e:
-        print(f"Error during OCR: {e}")
+        st.error(f"OCR 오류: {e}")
         return ""
 
-def process_uploaded_images(uploaded_files):
-    """업로드된 이미지들을 OCR 후 분류하여 각 폴더로 이동"""
+def classify_text(text, keyword_categories):
+    for category, keywords in keyword_categories.items():
+        if any(keyword in text for keyword in keywords):
+            return category
+    return "미분류"
+
+def process_images(uploaded_files, base_folder):
     keyword_categories = get_keyword_categories()
-    category_count = {category: 0 for category in keyword_categories.keys()}
-    category_count["unidentified"] = 0
-    
-    # 업로드된 이미지 처리
-    classified_images = {"unidentified": []}
+    output_folders = create_all_folders(base_folder)
+    results = []
+    category_counts = Counter()  # 하자 유형 개수 저장
     
     for uploaded_file in uploaded_files:
-        file_name = uploaded_file.name
-        image = uploaded_file.read()
+        image_path = os.path.join(base_folder, uploaded_file.name)
         
-        # OCR 수행
-        detected_text = ocr_image(image)
-        
-        # 텍스트 분류
-        category = classify_text(detected_text, keyword_categories)
-        
-        # 카운트 업데이트
-        category_count[category] += 1
-        
-        # 분류된 이미지 리스트에 추가
-        if category not in classified_images:
-            classified_images[category] = []
-        classified_images[category].append((file_name, image))
+        # 🔹 먼저 "미분류" 폴더에 저장
+        temp_folder = output_folders["미분류"]
+        temp_path = os.path.join(temp_folder, uploaded_file.name)
+
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        try:
+            detected_text = ocr_image(temp_path)
+            category = classify_text(detected_text, keyword_categories)
+            category_counts[category] += 1  # 유형별 개수 증가
+
+            # 🔹 올바른 폴더로 이동 (미분류에 남아 있는 걸 방지)
+            if category != "미분류":
+                target_folder = output_folders[category]
+                shutil.move(temp_path, os.path.join(target_folder, uploaded_file.name))
+
+            results.append((uploaded_file.name, category, detected_text))
+
+        except Exception as e:
+            st.error(f"파일 처리 오류: {e}")
     
-    return category_count, classified_images
+    return results, category_counts
 
-def zip_classified_images(classified_images):
-    """분류된 이미지를 ZIP 파일로 압축"""
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for category, images in classified_images.items():
-            for file_name, image in images:
-                zip_file.writestr(f"{category}/{file_name}", image)
-    zip_buffer.seek(0)
-    return zip_buffer
 
-# Streamlit UI 설정
-st.title("이미지 분류 및 통계 시스템")
+def create_zip(directory, output_filename="classified_images.zip"):
+    zip_path = shutil.make_archive(output_filename.replace(".zip", ""), 'zip', directory)
+    return zip_path
 
-# 이미지 업로드
-uploaded_files = st.file_uploader("이미지를 업로드하세요", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+st.title("인테리어 하자 분류 시스템")
+
+uploaded_files = st.file_uploader("이미지를 업로드하세요", accept_multiple_files=True, type=["jpg", "png", "jpeg"])
 
 if uploaded_files:
-    # 이미지 처리
-    category_count, classified_images = process_uploaded_images(uploaded_files)
+    base_folder = "data"
+    results, category_counts = process_images(uploaded_files, base_folder)
 
-    # 통계 출력
-    st.subheader("하자 유형별 개수")
-    for category, count in category_count.items():
-        st.write(f"{category}: {count}개")
-    
-    # 분류된 이미지 다운로드 링크 제공
-    st.subheader("분류된 이미지 다운로드")
-    zip_buffer = zip_classified_images(classified_images)
-    st.download_button(
-        label="분류된 이미지 다운로드",
-        data=zip_buffer,
-        file_name="classified_images.zip",
-        mime="application/zip"
-    )
+    if results:
+        st.write("📌 처리 결과:")
+        # for file_name, category, detected_text in results:
+        #     st.write(f"✅ **{file_name}** → {category} (검출된 텍스트: {detected_text})")
+
+        # 🔹 하자 유형별 개수 출력
+        st.write("\n📌 **하자 유형별 개수:**")
+        for category, count in category_counts.items():
+            st.write(f"- {category}: {count}개")
+
+        if st.button("📥 ZIP 파일 다운로드"):
+            zip_path = create_zip(base_folder)
+            with open(zip_path, "rb") as f:
+                st.download_button(
+                    label="🔽 ZIP 다운로드",
+                    data=f,
+                    file_name="classified_images.zip",
+                    mime="application/zip"
+                )
+            # 다운로드 완료 후 추가 작업을 막기 위해 'running' 상태를 종료할 수 있음
+            st.success("다운로드가 완료되었습니다.")
